@@ -1,5 +1,7 @@
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api/v1";
 
+//hi
+
 export async function fetchStudents() {
   const res = await fetch(`${BASE_URL}/students`, { cache: "no-store" });
   if (!res.ok) throw new Error("Failed to load students");
@@ -41,6 +43,19 @@ export async function analyzeSubmission({ studentId, title, text }) {
   if (!res.ok) {
     const errorData = await res.json().catch(() => ({}));
     throw new Error(errorData.detail || "Analysis failed");
+  }
+  return res.json();
+}
+
+export async function sendInterviewResponse({ sessionToken, message }) {
+  const res = await fetch(`${BASE_URL}/interviews/${sessionToken}/respond`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message }),
+  });
+  if (!res.ok) {
+    const errorData = await res.json().catch(() => ({}));
+    throw new Error(errorData.detail || "Interview response failed");
   }
   return res.json();
 }

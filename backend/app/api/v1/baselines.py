@@ -1,35 +1,29 @@
-import uuid
-from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import func
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.models.entities import Student, Baseline
+from app.models.entities import Baseline, Student
+from app.services.breeth import BreethMemoryClient
 from app.services.extractor import extract_stylometric_features
 
-router = APIRouter(tags=["baselines"])
+router = APIRouter(prefix="/baselines", tags=["baselines"])
+
 
 class BaselineCreate(BaseModel):
     student_id: str
     title: str
     text: str
 
-class BaselineResponse(BaseModel):
-    id: str
-    student_id: str
-    title: str
-    stylometric_vector: dict
-
-@router.post("/baselines/ingest", response_model=BaselineResponse)
-def ingest_baseline(payload: BaselineCreate, db: Session = Depends(get_db)):
+@router.post("/ingest")
+async def ingest_baseline(payload: BaselineCreate, db: Session = Depends(get_db)):
     student = db.query(Student).filter(Student.id == payload.student_id).first()
-    if not student:
+    if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
 
     vector = extract_stylometric_features(payload.text)
 
+    # 1. Save to Postgres
     baseline = Baseline(
         student_id=student.id,
         title=payload.title,
@@ -38,37 +32,14 @@ def ingest_baseline(payload: BaselineCreate, db: Session = Depends(get_db)):
     )
     db.add(baseline)
     db.commit()
-    db.refresh(baseline)
 
-    return {
-        "id": str(baseline.id),
-        "student_id": str(baseline.student_id),
-        "title": baseline.title,
-        "stylometric_vector": baseline.stylometric_vector,
-    }
-
-@router.get("/students/eligible-for-audit")
-def get_audit_eligible_students(db: Session = Depends(get_db)):
-    """Returns ONLY students who have at least 1 ingested baseline sample."""
-    results = (
-        db.query(
-            Student.id,
-            Student.name,
-            Student.roll_no,
-            func.count(Baseline.id).label("baseline_count"),
-        )
-        .join(Baseline, Student.id == Baseline.student_id)
-        .group_by(Student.id)
-        .all()
+    # 2. Asynchronously append sample to Breeth Cognitive Memory Graph
+    breeth = BreethMemoryClient()
+    await breeth.log_baseline_episode(
+        student_id=str(student.id),
+        student_name=student.name,
+        metrics=vector,
+        sample_title=payload.title
     )
 
-    return [
-        {
-            "id": str(r.id),
-            "name": r.name,
-            "roll_no": r.roll_no,
-            "baseline_count": r.baseline_count,
-            "status": "Profile Active",
-        }
-        for r in results
-    ]
+    return {"id": str(baseline.id), "stylometric_vector": vector}
