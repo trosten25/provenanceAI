@@ -4,49 +4,64 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import StudentCombobox from "@/components/StudentCombobox";
 import FileUploadZone from "@/components/FileUploadZone";
-import { fetchEligibleStudents, analyzeSubmission } from "@/lib/api";
-import { Search, AlertCircle, ArrowRight } from "lucide-react";
+import { fetchStudents, fetchEligibleStudents, analyzeSubmission } from "@/lib/api";
+import { Search, AlertTriangle, ArrowRight, Loader2 } from "lucide-react";
 
 export default function VerifyPage() {
   const router = useRouter();
-  const [eligibleStudents, setEligibleStudents] = useState([]);
+  const [students, setStudents] = useState([]);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
   useEffect(() => {
-    async function loadEligible() {
+    async function loadData() {
+      setIsLoading(true);
       try {
-        const data = await fetchEligibleStudents();
-        setEligibleStudents(data);
-        if (data.length > 0) {
+        // 1. First try to load eligible students (>= 1 baseline)
+        let data = await fetchEligibleStudents().catch(() => []);
+
+        // 2. If none have baselines yet, load all registered students so professor can see them
+        if (!data || data.length === 0) {
+          data = await fetchStudents().catch(() => []);
+        }
+
+        setStudents(data || []);
+        if (data && data.length > 0) {
           setSelectedStudentId(data[0].id);
         }
       } catch (err) {
-        setErrorMsg("Unable to retrieve eligible student roster from backend.");
+        setErrorMsg("Failed to connect to backend server.");
+      } finally {
+        setIsLoading(false);
       }
     }
-    loadEligible();
+    loadData();
   }, []);
+
+  const selectedStudent = students.find((s) => s.id === selectedStudentId);
+  const hasNoBaseline = selectedStudent && (selectedStudent.baseline_count === 0 || selectedStudent.status === "Baseline Needed");
 
   const handleAudit = async (e) => {
     e.preventDefault();
-    if (!selectedStudentId || !text.trim()) return;
+    if (!selectedStudentId || !text.trim() || hasNoBaseline) return;
+
     setIsEvaluating(true);
     setErrorMsg("");
 
     try {
       const data = await analyzeSubmission({
         studentId: selectedStudentId,
-        title: title || "Final Term Submission",
+        title: title || "Term Paper Submission",
         text,
       });
 
       router.push(`/submissions/${data.submission_id}`);
     } catch (err) {
-      setErrorMsg(err.message || "Failed to complete stylometric audit.");
+      setErrorMsg(err.message || "Stylometric evaluation failed.");
     } finally {
       setIsEvaluating(false);
     }
@@ -57,24 +72,29 @@ export default function VerifyPage() {
       <div>
         <h1 className="text-2xl font-black text-primary">Assignment Authorship Verification</h1>
         <p className="text-sm text-slate-500 mt-1">
-          Only students with at least 1 ingested baseline can be evaluated for stylometric divergence[cite: 1].
+          Evaluate submitted assignments against authenticated longitudinal writing baselines.
         </p>
       </div>
 
-      {eligibleStudents.length === 0 ? (
+      {isLoading ? (
+        <div className="p-8 text-center flex flex-col items-center justify-center space-y-2">
+          <Loader2 className="animate-spin text-secondary" size={24} />
+          <span className="text-xs text-slate-400">Loading student roster...</span>
+        </div>
+      ) : students.length === 0 ? (
         <div className="bg-amber-50 border border-accent p-6 rounded-xl space-y-3">
           <div className="flex items-center gap-2 text-primary font-bold">
-            <AlertCircle size={20} className="text-amber-600" />
-            <span>No Eligible Students Found</span>
+            <AlertTriangle size={20} className="text-amber-600" />
+            <span>No Registered Students</span>
           </div>
           <p className="text-sm text-slate-700">
-            No students currently have an authenticated baseline in the database. You must ingest at least one in-class draft before auditing assignments[cite: 1].
+            No students found in the database. Enroll students and ingest baselines first.
           </p>
           <Link
             href="/dashboard"
             className="inline-flex items-center gap-2 text-sm font-bold text-primary bg-accent px-4 py-2 rounded-lg hover:opacity-90 transition"
           >
-            <span>Go to Dashboard & Ingest Baseline</span>
+            <span>Go to Dashboard</span>
             <ArrowRight size={16} />
           </Link>
         </div>
@@ -86,8 +106,26 @@ export default function VerifyPage() {
             </div>
           )}
 
+          {hasNoBaseline && (
+            <div className="p-3.5 bg-amber-50 border border-accent rounded-lg flex items-center justify-between text-xs text-primary font-medium">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={16} className="text-amber-600 shrink-0" />
+                <span>
+                  <strong>{selectedStudent?.name}</strong> has no historical baseline uploaded.
+                </span>
+              </div>
+              <Link
+                href="/dashboard"
+                className="inline-flex items-center gap-1 text-primary font-bold underline hover:opacity-80 ml-2"
+              >
+                <span>Ingest Now</span>
+                <ArrowRight size={12} />
+              </Link>
+            </div>
+          )}
+
           <StudentCombobox
-            students={eligibleStudents}
+            students={students}
             selectedId={selectedStudentId}
             onSelect={setSelectedStudentId}
           />
@@ -98,7 +136,7 @@ export default function VerifyPage() {
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Final Paper: Quantum Computing"
+              placeholder="e.g. Final Term Paper: Urban Geography"
               className="w-full border border-slate-300 rounded-lg p-2.5 text-sm text-slate-800 focus:ring-2 focus:ring-secondary focus:outline-none"
             />
           </div>
@@ -111,8 +149,8 @@ export default function VerifyPage() {
 
           <button
             type="submit"
-            disabled={isEvaluating || !selectedStudentId || !text}
-            className="w-full bg-accent hover:opacity-90 text-primary font-extrabold py-3.5 rounded-lg flex items-center justify-center gap-2 shadow transition disabled:opacity-40"
+            disabled={isEvaluating || !selectedStudentId || !text || hasNoBaseline}
+            className="w-full bg-accent hover:opacity-90 text-primary font-extrabold py-3.5 rounded-lg flex items-center justify-center gap-2 shadow transition disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
           >
             <Search size={18} />
             <span>{isEvaluating ? "Calculating Statistical Delta..." : "Scan for Ghostwriting / AI"}</span>

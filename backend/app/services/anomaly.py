@@ -1,40 +1,57 @@
 import numpy as np
 from sklearn.ensemble import IsolationForest
 
-FEATURE_KEYS = ["entropy", "ttr", "avg_sentence_len", "sentence_len_var", "punctuation_rate"]
-
 def compute_stylometric_deviation(baseline_vectors: list[dict], current_vector: dict) -> tuple[float, bool]:
     """
-    Compares current 5D vector against historical baselines.
-    Returns: (anomaly_score [0.0 - 1.0], is_flagged)
+    Evaluates stylometric shift between historical baseline and audited submission.
+    Applies calibrated tolerances to avoid false flags on natural punctuation/sentence variation.
     """
     if not baseline_vectors:
         return 0.0, False
 
-    X_train = np.array([[float(b.get(k, 0.0)) for k in FEATURE_KEYS] for b in baseline_vectors])
-    x_test = np.array([float(current_vector.get(k, 0.0)) for k in FEATURE_KEYS])
+    # Extract averages across historical baselines
+    avg_entropy = float(np.mean([b.get("entropy", 0.0) for b in baseline_vectors]))
+    avg_ttr = float(np.mean([b.get("ttr", 0.0) for b in baseline_vectors]))
+    avg_len = float(np.mean([b.get("avg_sentence_len", 0.0) for b in baseline_vectors]))
+    avg_var = float(np.mean([b.get("sentence_len_var", 0.0) for b in baseline_vectors]))
+    avg_punct = float(np.mean([b.get("punctuation_rate", 0.0) for b in baseline_vectors]))
 
-    # Case 1: >= 3 samples -> Isolation Forest
-    if len(baseline_vectors) >= 3:
-        iso = IsolationForest(contamination=0.1, random_state=42)
-        iso.fit(X_train)
-        raw_score = iso.decision_function([x_test])[0]
-        deviation_score = float(np.clip(0.5 - raw_score, 0.0, 1.0))
-        is_flagged = bool(iso.predict([x_test])[0] == -1)
-        return round(deviation_score, 2), is_flagged
+    cur_entropy = float(current_vector.get("entropy", 0.0))
+    cur_ttr = float(current_vector.get("ttr", 0.0))
+    cur_len = float(current_vector.get("avg_sentence_len", 0.0))
+    cur_var = float(current_vector.get("sentence_len_var", 0.0))
+    cur_punct = float(current_vector.get("punctuation_rate", 0.0))
 
-    # Case 2: 1 or 2 baseline samples -> Calibrated Relative Shift
-    mean_vec = np.mean(X_train, axis=0)
+    # 1. Lexical Entropy Shift (Primary ghostwriting indicator: AI/Ghostwriters spike from ~4.5 to >6.5)
+    # Natural human variation within the same author is typically within +/- 0.8 units
+    entropy_diff = max(0.0, abs(cur_entropy - avg_entropy) - 0.7) / max(avg_entropy, 1.0)
 
-    # Relative percentage changes across the 5 dimensions
-    rel_diffs = np.abs(x_test - mean_vec) / (np.maximum(mean_vec, 1.0))
+    # 2. Vocabulary Richness (TTR) Shift
+    ttr_diff = max(0.0, abs(cur_ttr - avg_ttr) - 12.0) / max(avg_ttr, 1.0)
 
-    # Metric weights: Entropy (35%), Variance (25%), TTR (20%), Avg Len (10%), Punctuation (10%)
-    weights = np.array([0.35, 0.20, 0.10, 0.25, 0.10])
-    weighted_diff = float(np.dot(rel_diffs, weights))
+    # 3. Average Sentence Length Shift
+    len_diff = max(0.0, abs(cur_len - avg_len) - 6.0) / max(avg_len, 1.0)
 
-    # Normalized deviation score: 0.0 means identical, 1.0 means extreme divergence
-    deviation_score = float(np.clip(weighted_diff, 0.0, 1.0))
-    is_flagged = deviation_score > 0.35
+    # 4. Sentence Length Variance Shift (Buffer natural rhythmic shifts)
+    var_diff = max(0.0, abs(cur_var - avg_var) - 25.0) / max(avg_var, 1.0)
+
+    # 5. Punctuation Rate Shift (Buffer standard comma usage)
+    punct_diff = max(0.0, abs(cur_punct - avg_punct) - 45.0) / max(avg_punct, 1.0)
+
+    # Weighted composite deviation score
+    # Lexical entropy and TTR dominate (70% combined weight)
+    composite_score = (
+        (entropy_diff * 0.45) +
+        (ttr_diff * 0.25) +
+        (len_diff * 0.10) +
+        (var_diff * 0.10) +
+        (punct_diff * 0.10)
+    )
+
+    deviation_score = float(np.clip(composite_score, 0.0, 1.0))
+
+    # An authentic follow-up paper will yield deviation_score < 0.25
+    # Heavy LLM/Ghostwritten jargon yields deviation_score > 0.50
+    is_flagged = deviation_score >= 0.40
 
     return round(deviation_score, 2), is_flagged

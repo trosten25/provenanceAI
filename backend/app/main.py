@@ -13,6 +13,7 @@ import app.models.entities
 # Import API Routers
 from app.api.v1.students import router as students_router
 from app.api.v1.submissions import router as submissions_router
+from app.api.v1.baselines import router as baselines_router
 
 # Auto-create tables in PostgreSQL
 Base.metadata.create_all(bind=engine)
@@ -34,6 +35,9 @@ app.include_router(students_router, prefix="/api/v1")
 
 # Exposes: /api/v1/submissions/analyze
 app.include_router(submissions_router, prefix="/api/v1")
+
+# Exposes: /api/v1/baselines/ingest
+app.include_router(baselines_router, prefix="/api/v1")
 
 @app.get("/")
 def health_check():

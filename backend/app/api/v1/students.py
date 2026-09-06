@@ -10,7 +10,6 @@ from app.models.entities import Student, Baseline
 
 router = APIRouter(prefix="/students", tags=["students"])
 
-# Pydantic Schemas
 class StudentCreate(BaseModel):
     name: str
     roll_no: str
@@ -20,14 +19,14 @@ class StudentResponse(BaseModel):
     id: str
     name: str
     roll_no: str
-    email: Optional[str]
+    email: Optional[str] = None
     baseline_count: int
     status: str
 
     class Config:
         from_attributes = True
 
-# 1. Eligible Students (ONLY with >= 1 baseline)
+# 1. Eligible Students (Only students with >= 1 baseline)
 @router.get("/eligible-for-audit", response_model=List[StudentResponse])
 def get_audit_eligible_students(db: Session = Depends(get_db)):
     results = (
@@ -39,7 +38,7 @@ def get_audit_eligible_students(db: Session = Depends(get_db)):
             func.count(Baseline.id).label("baseline_count"),
         )
         .join(Baseline, Student.id == Baseline.student_id)
-        .group_by(Student.id)
+        .group_by(Student.id, Student.name, Student.roll_no, Student.email)
         .all()
     )
 
@@ -67,7 +66,7 @@ def list_students(db: Session = Depends(get_db)):
             func.count(Baseline.id).label("baseline_count"),
         )
         .outerjoin(Baseline, Student.id == Baseline.student_id)
-        .group_by(Student.id)
+        .group_by(Student.id, Student.name, Student.roll_no, Student.email)
         .all()
     )
 
